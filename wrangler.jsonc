@@ -13,7 +13,7 @@
     }
   ],
   // The app's own domain. The workers.dev address keeps working too.
-  "routes": [{ "pattern": "multi-pass.cattell.com", "custom_domain": true }],
+  "routes": [{ "pattern": "multi-post.cattell.com", "custom_domain": true }],
   "workers_dev": true,
   "observability": { "enabled": true }
 }
