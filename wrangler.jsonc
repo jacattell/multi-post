@@ -8,8 +8,7 @@
     {
       "binding": "DB",
       "database_name": "multi-post",
-      // Replace with the id printed by: npx wrangler d1 create multi-post
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "a5a20502-2e94-4e38-9820-d30ee299bc0a",
       "migrations_dir": "migrations"
     }
   ],
