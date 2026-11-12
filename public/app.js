@@ -16,18 +16,21 @@ function h(tag, props = {}, ...children) {
 }
 
 async function api(path, options = {}) {
+  const isForm = options.body instanceof FormData;
   const res = await fetch(path, {
     ...options,
-    headers: options.body ? { 'Content-Type': 'application/json' } : undefined,
+    headers: options.body && !isForm ? { 'Content-Type': 'application/json' } : undefined,
   });
   const data = await res.json().catch(() => ({}));
+  if (res.status === 401 && path !== '/api/login') showLogin();
   if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
   return data;
 }
 
 const state = {
   people: [],
-  config: { connected: {}, canVerifyX: false },
+  accounts: {},
+  images: [], // { blob, url, alt, width, height }
   enabled: new Set(JSON.parse(localStorage.getItem('platforms') || 'null') || PLATFORMS),
 };
 
@@ -49,9 +52,9 @@ function drawPlatforms() {
         },
       }),
       LABELS[p], ' ',
-      h('span', { class: 'badge' + (state.config.connected[p] ? ' on' : ''),
-        title: state.config.connected[p] ? 'Posts directly' : 'Opens the composer with your text' },
-        state.config.connected[p] ? 'direct' : 'copy'),
+      h('span', { class: 'badge' + (state.accounts[p]?.connected ? ' on' : ''),
+        title: state.accounts[p]?.connected ? 'Posts directly' : 'Not connected: opens their composer with your text' },
+        state.accounts[p]?.connected ? 'direct' : 'copy'),
     )));
 }
 
@@ -82,14 +85,14 @@ function drawPreviews() {
     }
     body.append(r.text.slice(at));
     if (p === 'linkedin' && r.mentions.some((m) => m.profile)) {
-      notes.set('', h('li', {}, 'LinkedIn only links a name when you pick it in their composer: retype @ before the name there.'));
+      notes.set('', h('li', {}, 'LinkedIn shows names as plain text. It only links a name picked inside LinkedIn itself.'));
     }
     return h('div', { class: 'preview' },
       h('header', {}, LABELS[p], h('span', { class: 'count' + (n > LIMITS[p] ? ' over' : '') }, `${n} / ${LIMITS[p]}`)),
       body,
       notes.size ? h('ul', { class: 'notes' }, ...notes.values()) : null);
   }));
-  $('post').disabled = !text.trim() || !state.enabled.size || anyOver.length > 0;
+  $('post').disabled = (!text.trim() && !state.images.length) || !state.enabled.size || anyOver.length > 0;
   $('status').textContent = anyOver.length ? `Too long for ${anyOver.map((p) => LABELS[p]).join(', ')}` : '';
 }
 
@@ -351,6 +354,78 @@ $('resolver-form').addEventListener('submit', async (e) => {
   }
 });
 
+// ---------- Images ----------
+
+const MAX_IMAGES = 4;
+const MAX_BYTES = 950_000; // Bluesky allows about 1 MB per image
+const KEEP_TYPES = ['image/jpeg', 'image/png', 'image/gif'];
+
+/** Returns the file as it is when small enough, otherwise a smaller JPEG. */
+async function prepareImage(file) {
+  const bitmap = await createImageBitmap(file);
+  const { width, height } = bitmap;
+  if (KEEP_TYPES.includes(file.type) && file.size <= MAX_BYTES) return { blob: file, width, height };
+
+  let scale = Math.min(1, 2048 / Math.max(width, height));
+  let quality = 0.9;
+  for (let attempt = 0; attempt < 12; attempt++) {
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(width * scale);
+    canvas.height = Math.round(height * scale);
+    const g = canvas.getContext('2d');
+    g.fillStyle = '#fff'; // JPEG has no transparency
+    g.fillRect(0, 0, canvas.width, canvas.height);
+    g.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise((done) => canvas.toBlob(done, 'image/jpeg', quality));
+    if (blob && blob.size <= MAX_BYTES) return { blob, width: canvas.width, height: canvas.height };
+    if (quality > 0.65) quality -= 0.1; else scale *= 0.8;
+  }
+  throw new Error('could not be made small enough');
+}
+
+async function addImages(files) {
+  for (const file of files) {
+    if (!file.type.startsWith('image/')) continue;
+    if (state.images.length >= MAX_IMAGES) {
+      $('status').textContent = `At most ${MAX_IMAGES} images`;
+      break;
+    }
+    try {
+      const prepared = await prepareImage(file);
+      state.images.push({ ...prepared, url: URL.createObjectURL(prepared.blob), alt: '' });
+    } catch (err) {
+      $('status').textContent = `${file.name}: ${err.message || 'not a usable image'}`;
+    }
+  }
+  drawImages();
+}
+
+function drawImages() {
+  $('images').replaceChildren(...state.images.map((img, i) =>
+    h('li', {},
+      h('img', { src: img.url, alt: img.alt || `Image ${i + 1}` }),
+      h('input', {
+        placeholder: 'Describe this image (alt text)', 'aria-label': `Description of image ${i + 1}`,
+        value: img.alt, maxlength: 1000, oninput: (e) => { img.alt = e.target.value; },
+      }),
+      h('button', { 'aria-label': `Remove image ${i + 1}`, onclick: () => {
+        URL.revokeObjectURL(img.url);
+        state.images.splice(i, 1);
+        drawImages();
+      } }, 'Remove'))));
+  $('add-image').disabled = state.images.length >= MAX_IMAGES;
+  drawPreviews();
+}
+
+$('add-image').addEventListener('click', () => $('image-input').click());
+$('image-input').addEventListener('change', (e) => { addImages([...e.target.files]); e.target.value = ''; });
+draft.addEventListener('paste', (e) => {
+  const files = [...(e.clipboardData?.files || [])];
+  if (files.length) { e.preventDefault(); addImages(files); }
+});
+$('composer').addEventListener('dragover', (e) => e.preventDefault());
+$('composer').addEventListener('drop', (e) => { e.preventDefault(); addImages([...e.dataTransfer.files]); });
+
 // ---------- Posting ----------
 
 $('post').addEventListener('click', async () => {
@@ -358,25 +433,29 @@ $('post').addEventListener('click', async () => {
   button.disabled = true;
   $('status').textContent = 'Posting…';
   $('results').replaceChildren();
+  const hasImages = state.images.length > 0;
+  const form = new FormData();
+  form.set('text', draft.value);
+  form.set('platforms', JSON.stringify([...state.enabled]));
+  form.set('imageMeta', JSON.stringify(state.images.map(({ alt, width, height }) => ({ alt, width, height }))));
+  for (const img of state.images) form.append('images', img.blob, 'image');
   try {
-    const results = await api('/api/post', {
-      method: 'POST',
-      body: JSON.stringify({ text: draft.value, platforms: [...state.enabled] }),
-    });
+    const results = await api('/api/post', { method: 'POST', body: form });
     $('status').textContent = '';
     $('results').replaceChildren(...Object.entries(results).map(([p, r]) => {
       const copyAndOpen = h('a', {
         href: r.url, target: '_blank', rel: 'noopener noreferrer',
         onclick: () => navigator.clipboard?.writeText(r.text).catch(() => {}),
       }, `Copy text and open ${LABELS[p]} ↗`);
+      const addByHand = hasImages ? h('span', { class: 'hint-inline' }, 'Add the images there by hand.') : null;
       if (r.status === 'posted') {
         return h('div', { class: 'result' }, h('strong', {}, LABELS[p]), h('span', { class: 'posted' }, 'Posted'),
           h('a', { href: r.url, target: '_blank', rel: 'noopener noreferrer' }, 'View post ↗'));
       }
       if (r.status === 'error') {
-        return h('div', { class: 'result' }, h('strong', {}, LABELS[p]), h('span', { class: 'failed' }, `Failed: ${r.error}`), copyAndOpen);
+        return h('div', { class: 'result' }, h('strong', {}, LABELS[p]), h('span', { class: 'failed' }, `Failed: ${r.error}`), copyAndOpen, addByHand);
       }
-      return h('div', { class: 'result' }, h('strong', {}, LABELS[p]), copyAndOpen);
+      return h('div', { class: 'result' }, h('strong', {}, LABELS[p]), h('span', {}, 'Not connected.'), copyAndOpen, addByHand);
     }));
   } catch (err) {
     $('status').textContent = err.message;
@@ -385,9 +464,148 @@ $('post').addEventListener('click', async () => {
   }
 });
 
+$('clear').addEventListener('click', () => {
+  if ((draft.value.trim() || state.images.length) && !confirm('Clear the text and images?')) return;
+  draft.value = '';
+  state.images.forEach((img) => URL.revokeObjectURL(img.url));
+  state.images = [];
+  $('results').replaceChildren();
+  drawImages();
+  onDraftChange();
+  draft.focus();
+});
+
+// ---------- Your accounts ----------
+
+const ACCOUNT_FORMS = {
+  bluesky: {
+    intro: 'Use an app password, not your main password. Create one in Bluesky under Settings → Privacy and security → App passwords.',
+    fields: [
+      { name: 'handle', label: 'Handle', placeholder: 'you.bsky.social' },
+      { name: 'appPassword', label: 'App password', placeholder: 'xxxx-xxxx-xxxx-xxxx', type: 'password' },
+    ],
+  },
+  mastodon: {
+    intro: 'On your server, go to Preferences → Development → New application. Tick write:statuses, write:media and read:search, then copy the access token.',
+    fields: [
+      { name: 'instance', label: 'Server', placeholder: 'mastodon.social' },
+      { name: 'token', label: 'Access token', type: 'password' },
+    ],
+  },
+};
+
+function drawAccounts() {
+  $('accounts').replaceChildren(...PLATFORMS.map((p) => {
+    const a = state.accounts[p] || {};
+    const daysLeft = a.expiresAt ? Math.floor((a.expiresAt - Date.now()) / 86400_000) : null;
+    let status = a.connected ? `Connected as ${a.label}` : 'Not connected';
+    if (a.connected && daysLeft !== null) status += daysLeft < 0 ? ' (expired, reconnect)' : ` (reconnect within ${daysLeft} days)`;
+    if (!a.connected && !a.canConnect) status = 'Needs setup first. See the README.';
+
+    const connect = ACCOUNT_FORMS[p]
+      ? h('button', { onclick: () => openAccountForm(p) }, a.connected ? 'Change' : 'Connect')
+      : a.canConnect ? h('a', { class: 'button', href: `/api/connect/${p}` }, a.connected ? 'Reconnect' : 'Connect') : null;
+    const disconnect = a.connected && h('button', { onclick: async () => {
+      if (!confirm(`Disconnect ${LABELS[p]}?`)) return;
+      await api(`/api/accounts/${p}`, { method: 'DELETE', body: '{}' });
+      await loadConfig();
+    } }, 'Disconnect');
+
+    return h('li', {},
+      h('span', { class: 'name' }, LABELS[p]),
+      h('span', { class: 'handles' + (a.connected ? ' ok' : '') }, status),
+      connect, disconnect || null);
+  }));
+}
+
+const accountDialog = $('account-dialog');
+let accountPlatform = null;
+
+function openAccountForm(platform) {
+  const cfg = ACCOUNT_FORMS[platform];
+  accountPlatform = platform;
+  $('account-title').textContent = `Connect ${LABELS[platform]}`;
+  $('account-intro').textContent = cfg.intro;
+  $('account-error').textContent = '';
+  $('account-fields').replaceChildren(...cfg.fields.map((f) =>
+    h('label', { class: 'field' }, f.label,
+      h('input', { name: f.name, type: f.type || 'text', placeholder: f.placeholder, required: true, autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' }))));
+  accountDialog.showModal();
+}
+
+$('account-cancel').addEventListener('click', () => accountDialog.close());
+$('account-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const body = Object.fromEntries(new FormData(e.target));
+  $('account-save').disabled = true;
+  try {
+    await api(`/api/accounts/${accountPlatform}`, { method: 'POST', body: JSON.stringify(body) });
+    accountDialog.close();
+    await loadConfig();
+  } catch (err) {
+    $('account-error').textContent = err.message;
+  } finally {
+    $('account-save').disabled = false;
+  }
+});
+
+async function loadConfig() {
+  state.accounts = (await api('/api/config')).accounts;
+  drawPlatforms();
+  drawAccounts();
+}
+
+// ---------- Login ----------
+
+function showLogin() {
+  $('app').hidden = true;
+  $('logout').hidden = true;
+  $('login').hidden = false;
+  $('login-password').focus();
+}
+
+$('login-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  $('login-error').textContent = '';
+  try {
+    await api('/api/login', { method: 'POST', body: JSON.stringify({ password: $('login-password').value }) });
+    $('login-password').value = '';
+    await start();
+  } catch (err) {
+    $('login-error').textContent = err.message;
+  }
+});
+
+$('logout').addEventListener('click', async () => {
+  await api('/api/logout', { method: 'POST', body: '{}' });
+  showLogin();
+});
+
 // ---------- Start ----------
 
-draft.value = localStorage.getItem('draft') || '';
-state.config = await api('/api/config');
-drawPlatforms();
-await loadPeople();
+async function start() {
+  let me;
+  try {
+    me = await api('/api/me');
+  } catch (err) {
+    showLogin();
+    $('login-error').textContent = err.message;
+    return;
+  }
+  if (!me.loggedIn) return showLogin();
+  $('login').hidden = true;
+  $('app').hidden = false;
+  $('logout').hidden = false;
+  draft.value = localStorage.getItem('draft') || '';
+  await loadConfig();
+  await loadPeople();
+  drawImages();
+
+  // Message left by the "Connect X / LinkedIn" round trip.
+  const params = new URLSearchParams(location.search);
+  if (params.has('connected')) $('accounts-status').textContent = `${LABELS[params.get('connected')] || 'Account'} connected.`;
+  if (params.has('connect_error')) $('accounts-status').textContent = `Could not connect. ${params.get('connect_error')}`;
+  if (params.size) history.replaceState(null, '', '/');
+}
+
+await start();

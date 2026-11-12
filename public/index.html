@@ -8,11 +8,25 @@
 </head>
 <body>
   <header>
-    <h1>multi-post</h1>
-    <p>Write once. Post to Bluesky, LinkedIn, Mastodon and X.</p>
+    <div>
+      <h1>multi-post</h1>
+      <p>Write once. Post to Bluesky, LinkedIn, Mastodon and X.</p>
+    </div>
+    <button id="logout" hidden>Log out</button>
   </header>
 
-  <main>
+  <section class="card" id="login" hidden>
+    <h2>Log in</h2>
+    <form id="login-form">
+      <label class="field">Password
+        <input id="login-password" type="password" required autocomplete="current-password">
+      </label>
+      <p id="login-error" class="error" role="alert"></p>
+      <button class="primary">Log in</button>
+    </form>
+  </section>
+
+  <main id="app" hidden>
     <section class="card" id="composer">
       <h2>Compose</h2>
       <div class="editor">
@@ -20,9 +34,13 @@
           aria-label="Post text" aria-controls="suggest" autocomplete="off"></textarea>
         <ul id="suggest" role="listbox" hidden></ul>
       </div>
+      <ul id="images"></ul>
+      <input id="image-input" type="file" accept="image/*" multiple hidden>
       <div id="platforms" class="platforms" role="group" aria-label="Post to"></div>
       <div class="actions">
         <button id="post" class="primary">Post</button>
+        <button id="add-image">Add image</button>
+        <button id="clear">Clear</button>
         <span id="status" role="status"></span>
       </div>
       <div id="results"></div>
@@ -33,13 +51,20 @@
       <div id="previews"></div>
     </section>
 
-    <section class="card" id="people-card">
+    <section class="card wide">
+      <h2>Your accounts</h2>
+      <p class="hint">Connected accounts post directly. Others open that platform's composer with your text.</p>
+      <ul id="accounts" class="rows"></ul>
+      <p id="accounts-status" class="hint" role="status"></p>
+    </section>
+
+    <section class="card wide" id="people-card">
       <div class="row">
         <h2>People</h2>
         <button id="add-person">Add person</button>
       </div>
       <p class="hint">Saved profiles. Type @ in a post to mention them.</p>
-      <ul id="people"></ul>
+      <ul id="people" class="rows"></ul>
     </section>
   </main>
 
@@ -55,6 +80,19 @@
       <div class="actions end">
         <button type="button" id="resolver-cancel">Cancel</button>
         <button type="submit" class="primary" id="resolver-save">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="account-dialog">
+    <form method="dialog" id="account-form">
+      <h2 id="account-title">Connect</h2>
+      <p id="account-intro" class="hint"></p>
+      <div id="account-fields"></div>
+      <p id="account-error" class="error" role="alert"></p>
+      <div class="actions end">
+        <button type="button" id="account-cancel">Cancel</button>
+        <button type="submit" class="primary" id="account-save">Connect</button>
       </div>
     </form>
   </dialog>

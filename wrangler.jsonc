@@ -1,0 +1,19 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "multi-post",
+  "main": "src/worker.js",
+  "compatibility_date": "2025-10-01",
+  "assets": { "directory": "./public", "binding": "ASSETS" },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "multi-post",
+      // Replace with the id printed by: npx wrangler d1 create multi-post
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  // To use your own domain, uncomment and set the name you want:
+  // "routes": [{ "pattern": "post.cattell.com", "custom_domain": true }],
+  "observability": { "enabled": true }
+}

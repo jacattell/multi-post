@@ -1,0 +1,15 @@
+# Local settings. Copy to .dev.vars (never commit it).
+# In production these are set with: npx wrangler secret put NAME
+
+# The password you log in with.
+APP_PASSWORD=change-me
+# Any long random text. Signs your login and encrypts stored account tokens.
+SESSION_SECRET=change-me-to-something-long-and-random
+
+# Optional: needed only to connect X (from your app at developer.x.com).
+X_CLIENT_ID=
+X_CLIENT_SECRET=
+
+# Optional: needed only to connect LinkedIn (from linkedin.com/developers).
+LINKEDIN_CLIENT_ID=
+LINKEDIN_CLIENT_SECRET=

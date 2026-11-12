@@ -2,10 +2,12 @@
 // Every resolver returns an array of candidates:
 //   { handle, displayName, avatar, url, platformId, unverified? }
 
+import { xAccessToken } from './accounts.js';
+
 const TIMEOUT_MS = 8000;
 
-async function getJson(fetchFn, url, headers = {}) {
-  const res = await fetchFn(url, { headers, signal: AbortSignal.timeout(TIMEOUT_MS) });
+async function getJson(ctx, url, headers = {}) {
+  const res = await ctx.fetch(url, { headers, signal: AbortSignal.timeout(TIMEOUT_MS) });
   if (!res.ok) throw new Error(`${new URL(url).hostname} answered ${res.status}`);
   return res.json();
 }
@@ -13,11 +15,11 @@ async function getJson(fetchFn, url, headers = {}) {
 const stripAt = (q) => q.trim().replace(/^@/, '');
 
 // Bluesky: public search, no login needed.
-async function bluesky(q, { fetch }) {
+async function bluesky(q, ctx) {
   const url = new URL('https://public.api.bsky.app/xrpc/app.bsky.actor.searchActorsTypeahead');
   url.searchParams.set('q', stripAt(q));
   url.searchParams.set('limit', '6');
-  const data = await getJson(fetch, url.href);
+  const data = await getJson(ctx, url.href);
   return (data.actors || []).map((a) => ({
     handle: a.handle,
     displayName: a.displayName || a.handle,
@@ -25,10 +27,6 @@ async function bluesky(q, { fetch }) {
     url: `https://bsky.app/profile/${a.handle}`,
     platformId: a.did,
   }));
-}
-
-export function mastodonInstance(env) {
-  return (env.MASTODON_INSTANCE || 'https://mastodon.social').replace(/\/+$/, '');
 }
 
 function mastodonAccount(a, host) {
@@ -41,28 +39,29 @@ function mastodonAccount(a, host) {
   };
 }
 
-// Mastodon: "user@server" is looked up on that server; anything else is
-// searched on your home server (better results with MASTODON_TOKEN).
-async function mastodon(q, { fetch, env }) {
+// Mastodon: "user@server" is looked up on that server. Anything else is
+// searched on your own server (or mastodon.social if none is connected).
+async function mastodon(q, ctx) {
   const query = stripAt(q);
   const full = query.match(/^([\w.-]+)@([a-z0-9-]+(?:\.[a-z0-9-]+)+)$/i);
   if (full) {
     try {
-      const a = await getJson(fetch, `https://${full[2]}/api/v1/accounts/lookup?acct=${encodeURIComponent(full[1])}`);
+      const a = await getJson(ctx, `https://${full[2]}/api/v1/accounts/lookup?acct=${encodeURIComponent(full[1])}`);
       return [mastodonAccount(a, full[2].toLowerCase())];
     } catch { /* fall through to search */ }
   }
-  const instance = mastodonInstance(env);
+  const account = ctx.accounts.mastodon;
+  const instance = account?.instance || 'https://mastodon.social';
   const url = new URL(instance + '/api/v2/search');
   url.searchParams.set('q', query);
   url.searchParams.set('type', 'accounts');
   url.searchParams.set('limit', '6');
   const headers = {};
-  if (env.MASTODON_TOKEN) {
+  if (account) {
     url.searchParams.set('resolve', 'true');
-    headers.Authorization = `Bearer ${env.MASTODON_TOKEN}`;
+    headers.Authorization = `Bearer ${account.token}`;
   }
-  const data = await getJson(fetch, url.href, headers);
+  const data = await getJson(ctx, url.href, headers);
   return (data.accounts || []).map((a) => mastodonAccount(a, new URL(instance).host));
 }
 
@@ -71,22 +70,27 @@ export function parseXHandle(q) {
   return m ? m[1] : null;
 }
 
-// X has no free search. We take the handle as typed, and verify it only if
-// a bearer token is configured.
-async function x(q, { fetch, env }) {
+// X has no name search on its standard API. We take the exact handle, and
+// check it exists when your X account is connected.
+async function x(q, ctx) {
   const handle = parseXHandle(q);
   if (!handle) return [];
-  const url = `https://x.com/${handle}`;
-  if (!env.X_BEARER_TOKEN) {
-    return [{ handle, displayName: null, avatar: null, url, platformId: null, unverified: true }];
+  const unverified = { handle, displayName: null, avatar: null, url: `https://x.com/${handle}`, platformId: null, unverified: true };
+  if (!ctx.accounts.x) return [unverified];
+  let res;
+  try {
+    const token = await xAccessToken(ctx, ctx.accounts.x);
+    res = await ctx.fetch(
+      `https://api.x.com/2/users/by/username/${handle}?user.fields=name,profile_image_url`,
+      { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(TIMEOUT_MS) },
+    );
+  } catch {
+    return [unverified];
   }
-  const data = await getJson(
-    fetch,
-    `https://api.x.com/2/users/by/username/${handle}?user.fields=name,profile_image_url`,
-    { Authorization: `Bearer ${env.X_BEARER_TOKEN}` },
-  );
-  if (!data.data) return [];
-  const u = data.data;
+  // Out of quota or similar: still let the handle be used, just unchecked.
+  if (!res.ok) return [unverified];
+  const u = (await res.json()).data;
+  if (!u) return [];
   return [{
     handle: u.username,
     displayName: u.name,
