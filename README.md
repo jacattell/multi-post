@@ -57,9 +57,8 @@ You need Node.js 22.13 or newer and a Cloudflare account.
 
 5. Set up sign-in (next section), then deploy once more.
 
-**Your own domain:** in `wrangler.jsonc`, uncomment the `routes` line, set the
-name you want (for example `post.cattell.com`), and deploy again. The domain
-must already be on your Cloudflare account.
+**Your own domain:** set the `routes` line in `wrangler.jsonc` to the name you
+want and deploy again. The domain must already be on your Cloudflare account.
 
 ## Set up sign-in
 

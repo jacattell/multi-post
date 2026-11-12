@@ -12,7 +12,8 @@
       "migrations_dir": "migrations"
     }
   ],
-  // To use your own domain, uncomment and set the name you want:
-  // "routes": [{ "pattern": "post.cattell.com", "custom_domain": true }],
+  // The app's own domain. The workers.dev address keeps working too.
+  "routes": [{ "pattern": "multi-pass.cattell.com", "custom_domain": true }],
+  "workers_dev": true,
   "observability": { "enabled": true }
 }
