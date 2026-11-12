@@ -36,42 +36,39 @@ export async function safeEqual(a, b, secret) {
   return diff === 0;
 }
 
-// ---------- Session cookie ----------
+// ---------- Signed cookies ----------
 
-const COOKIE = 'mp_session';
-const SESSION_DAYS = 30;
-
-export async function sessionCookie(env, secure) {
-  const expires = Date.now() + SESSION_DAYS * 86400_000;
-  const value = `${expires}.${await hmac(env.SESSION_SECRET, `session:${expires}`)}`;
-  return `${COOKIE}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_DAYS * 86400}${secure ? '; Secure' : ''}`;
+/** A cookie holding "value", which cannot be changed without the secret. */
+export async function signedCookie(env, name, value, maxAgeSeconds, secure) {
+  const expires = Date.now() + maxAgeSeconds * 1000;
+  const body = `${b64url(enc.encode(value))}.${expires}`;
+  const signed = `${body}.${await hmac(env.SESSION_SECRET, `${name}:${body}`)}`;
+  return `${name}=${signed}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSeconds}${secure ? '; Secure' : ''}`;
 }
 
-export function clearCookie(secure) {
-  return `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure ? '; Secure' : ''}`;
+export function expiredCookie(name, secure) {
+  return `${name}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure ? '; Secure' : ''}`;
 }
 
-export async function isLoggedIn(request, env) {
-  const m = (request.headers.get('Cookie') || '').match(new RegExp(`(?:^|;\\s*)${COOKIE}=(\\d+)\\.([\\w-]+)`));
-  if (!m || Number(m[1]) < Date.now()) return false;
-  return safeEqual(m[2], await hmac(env.SESSION_SECRET, `session:${m[1]}`), env.SESSION_SECRET);
+/** @returns the cookie's value, or null if missing, expired or tampered with. */
+export async function readSignedCookie(env, request, name) {
+  const m = (request.headers.get('Cookie') || '').match(new RegExp(`(?:^|;\\s*)${name}=([\\w-]+)\\.(\\d+)\\.([\\w-]+)`));
+  if (!m || Number(m[2]) < Date.now()) return null;
+  const good = await hmac(env.SESSION_SECRET, `${name}:${m[1]}.${m[2]}`);
+  if (!(await safeEqual(m[3], good, env.SESSION_SECRET))) return null;
+  try { return dec.decode(unb64url(m[1])); } catch { return null; }
 }
 
-// ---------- Login throttle ----------
+// ---------- Login session ----------
 
-const WINDOW_MS = 15 * 60_000;
-const MAX_ATTEMPTS = 8;
+const SESSION = 'mp_session';
+const SESSION_SECONDS = 30 * 86400;
 
-export async function tooManyAttempts(db, ip) {
-  const since = Date.now() - WINDOW_MS;
-  await db.prepare('DELETE FROM login_attempts WHERE at < ?').bind(since).run();
-  const row = await db.prepare('SELECT count(*) AS n FROM login_attempts WHERE ip = ?').bind(ip).first();
-  return row.n >= MAX_ATTEMPTS;
-}
+export const sessionCookie = (env, email, secure) => signedCookie(env, SESSION, email, SESSION_SECONDS, secure);
+export const clearSession = (secure) => expiredCookie(SESSION, secure);
 
-export async function recordFailure(db, ip) {
-  await db.prepare('INSERT INTO login_attempts (ip, at) VALUES (?, ?)').bind(ip, Date.now()).run();
-}
+/** @returns the signed-in email, or null. */
+export const sessionEmail = (env, request) => readSignedCookie(env, request, SESSION);
 
 // ---------- Encryption for stored account tokens ----------
 

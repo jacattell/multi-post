@@ -7,9 +7,10 @@ Write a post once, then send it to Bluesky, LinkedIn, Mastodon and X.
   letters is enough.
 - **Images.** Up to 4 per post, each with alt text.
 - **Direct posting** to all four platforms, once you connect your accounts.
-- **Hosted on Cloudflare** (free plan), behind a password.
+- **Hosted on Cloudflare** (free plan). Sign in with Google or GitHub.
 
-It is built for one person: you.
+It is built for one person, or a few who share the same social accounts.
+Only the email addresses you list can sign in.
 
 ## Deploy to Cloudflare
 
@@ -31,17 +32,20 @@ You need Node.js 22.13 or newer and a Cloudflare account.
    npx wrangler d1 create multi-post
    ```
 
-3. Set your login password, and a long random secret (for example the output
-   of `openssl rand -hex 32`). The secret signs your login and encrypts the
+3. Set who may sign in, and a long random secret (for example the output of
+   `openssl rand -hex 32`). The secret signs your login and encrypts the
    account tokens the app stores.
 
    ```bash
-   npx wrangler secret put APP_PASSWORD
+   npx wrangler secret put ALLOWED_EMAILS
    ```
 
    ```bash
    npx wrangler secret put SESSION_SECRET
    ```
+
+   `ALLOWED_EMAILS` is one or more email addresses, separated by commas. Use
+   the address on your Google or GitHub account.
 
 4. Deploy. This also creates the database tables.
 
@@ -49,15 +53,63 @@ You need Node.js 22.13 or newer and a Cloudflare account.
    npm run deploy
    ```
 
-Wrangler prints the address, like `https://multi-post.<you>.workers.dev`.
+   Wrangler prints the address, like `https://multi-post.<you>.workers.dev`.
+
+5. Set up sign-in (next section), then deploy once more.
 
 **Your own domain:** in `wrangler.jsonc`, uncomment the `routes` line, set the
 name you want (for example `post.cattell.com`), and deploy again. The domain
 must already be on your Cloudflare account.
 
+## Set up sign-in
+
+Set up Google, GitHub, or both. The sign-in page shows a button for each one
+you set up. `YOUR-APP-ADDRESS` is the address from step 4, or your own domain.
+
+### Google
+
+1. In the [Google Cloud console](https://console.cloud.google.com/apis/credentials),
+   create a project, then **Create credentials → OAuth client ID**, type
+   **Web application**. (It may ask you to fill in a consent screen first.)
+2. Add the authorised redirect URI
+   `https://YOUR-APP-ADDRESS/api/login/google/callback`.
+3. Save the client ID and secret:
+
+   ```bash
+   npx wrangler secret put GOOGLE_CLIENT_ID
+   ```
+
+   ```bash
+   npx wrangler secret put GOOGLE_CLIENT_SECRET
+   ```
+
+### GitHub
+
+1. In GitHub: Settings → Developer settings → OAuth Apps → **New OAuth App**.
+2. Set the authorization callback URL to
+   `https://YOUR-APP-ADDRESS/api/login/github/callback`.
+3. Generate a client secret, then save both values:
+
+   ```bash
+   npx wrangler secret put GITHUB_CLIENT_ID
+   ```
+
+   ```bash
+   npx wrangler secret put GITHUB_CLIENT_SECRET
+   ```
+
+Your GitHub account must have a *verified* email that is in `ALLOWED_EMAILS`.
+It does not need to be public.
+
+### Who gets in
+
+Only verified email addresses in `ALLOWED_EMAILS`. Everyone who signs in
+shares the same saved people and connected accounts. Removing an address
+locks that person out straight away. A sign-in lasts 30 days.
+
 ## Connect your accounts
 
-Open the app, log in, and use **Your accounts**. A platform that is not
+Open the app, sign in, and use **Your accounts**. A platform that is not
 connected still works: you get a **Copy text and open** link to its own
 composer.
 
@@ -149,19 +201,22 @@ cp .dev.vars.example .dev.vars
 npm run dev
 ```
 
-This runs the app at http://localhost:8787 with a local database.
+This runs the app at http://localhost:8787 with a local database. To sign in
+locally, add `http://localhost:8787/api/login/google/callback` (or the GitHub
+one) as a second redirect URL on your sign-in app.
 `npm run dev:node` does the same on plain Node, without Cloudflare's tooling.
 
 ```bash
 npm test
 ```
 
-- `src/worker.js` – login and the API
+- `src/worker.js` – the API
+- `src/login.js` – Google and GitHub sign-in
 - `src/accounts.js` – connecting and storing your accounts
 - `src/resolve.js` – profile lookup per platform
 - `src/post.js` – posting, with images
 - `src/db.js` – saved people and profiles
-- `src/auth.js` – session cookie and encryption
+- `src/auth.js` – signed cookies and encryption
 - `public/` – the page; `public/render.js` turns `@[Name]` into each
   platform's text and is shared with the Worker
 - `migrations/` – database tables

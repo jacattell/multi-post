@@ -5,7 +5,8 @@ import { listPeople, savePerson, deletePerson, ValidationError } from './db.js';
 import { resolve } from './resolve.js';
 import { publish } from './post.js';
 import { PLATFORMS, LABELS, LIMITS, render, count } from '../public/render.js';
-import { isLoggedIn, sessionCookie, clearCookie, safeEqual, tooManyAttempts, recordFailure } from './auth.js';
+import { sessionCookie, clearSession, sessionEmail } from './auth.js';
+import { allowedEmails, loginProviders, isProvider, startLogin, finishLogin, clearLoginState } from './login.js';
 import {
   getAccounts, publicAccounts, deleteAccount,
   connectBluesky, connectMastodon, startOAuth, finishOAuth,
@@ -18,7 +19,11 @@ const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif'];
 const send = (status, body, headers = {}) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...headers } });
 
-const redirect = (location) => new Response(null, { status: 302, headers: { Location: location } });
+function redirect(location, cookies = []) {
+  const headers = new Headers({ Location: location, 'Cache-Control': 'no-store' });
+  for (const c of cookies) headers.append('Set-Cookie', c);
+  return new Response(null, { status: 302, headers });
+}
 
 async function readJson(request) {
   try {
@@ -66,8 +71,10 @@ async function api(request, url, ctx) {
   const method = request.method;
   const secure = url.protocol === 'https:';
 
-  if (!env.APP_PASSWORD || !env.SESSION_SECRET) {
-    return send(503, { error: 'Not set up: add the APP_PASSWORD and SESSION_SECRET secrets. See the README.' });
+  const providers = loginProviders(env);
+  const allowed = allowedEmails(env);
+  if (!env.SESSION_SECRET || !allowed.length || !providers.length) {
+    return send(503, { error: 'Not set up: add SESSION_SECRET, ALLOWED_EMAILS, and Google or GitHub sign-in secrets. See the README.' });
   }
 
   // Only our own page may make changes (blocks cross-site requests).
@@ -75,24 +82,31 @@ async function api(request, url, ctx) {
     return send(403, { error: 'Cross-site request refused' });
   }
 
-  // ----- Login -----
-  if (pathname === '/api/login' && method === 'POST') {
-    const ip = request.headers.get('CF-Connecting-IP') || 'local';
-    if (await tooManyAttempts(db, ip)) return send(429, { error: 'Too many attempts. Try again in 15 minutes.' });
-    const { password } = await readJson(request);
-    if (!(await safeEqual(String(password || ''), env.APP_PASSWORD, env.SESSION_SECRET))) {
-      await recordFailure(db, ip);
-      return send(401, { error: 'Wrong password' });
+  // ----- Sign in with Google or GitHub -----
+  const loginMatch = pathname.match(/^\/api\/login\/(\w+)(\/callback)?$/);
+  if (loginMatch && method === 'GET') {
+    const [, provider, isCallback] = loginMatch;
+    if (!isProvider(provider) || !providers.includes(provider)) return send(404, { error: 'Unknown sign-in method' });
+    if (!isCallback) {
+      const { location, cookie } = await startLogin(ctx, provider, url.origin, secure);
+      return redirect(location, [cookie]);
     }
-    return send(200, { ok: true }, { 'Set-Cookie': await sessionCookie(env, secure) });
+    try {
+      const email = await finishLogin(ctx, provider, request, url.searchParams, url.origin);
+      return redirect('/', [await sessionCookie(env, email, secure), clearLoginState(secure)]);
+    } catch (err) {
+      return redirect(`/?login_error=${encodeURIComponent(err.message)}`, [clearLoginState(secure)]);
+    }
   }
   if (pathname === '/api/logout' && method === 'POST') {
-    return send(200, { ok: true }, { 'Set-Cookie': clearCookie(secure) });
+    return send(200, { ok: true }, { 'Set-Cookie': clearSession(secure) });
   }
 
-  const loggedIn = await isLoggedIn(request, env);
-  if (pathname === '/api/me' && method === 'GET') return send(200, { loggedIn });
-  if (!loggedIn) return send(401, { error: 'Please log in' });
+  // Checked on every request, so removing an email from ALLOWED_EMAILS locks it out.
+  const signedIn = await sessionEmail(env, request);
+  const email = signedIn && allowed.includes(signedIn) ? signedIn : null;
+  if (pathname === '/api/me' && method === 'GET') return send(200, { loggedIn: Boolean(email), email, providers });
+  if (!email) return send(401, { error: 'Please log in' });
 
   // ----- Everything below needs a login -----
   ctx.accounts = await getAccounts(ctx);

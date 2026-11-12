@@ -22,7 +22,7 @@ async function api(path, options = {}) {
     headers: options.body && !isForm ? { 'Content-Type': 'application/json' } : undefined,
   });
   const data = await res.json().catch(() => ({}));
-  if (res.status === 401 && path !== '/api/login') showLogin();
+  if (res.status === 401) showLogin(state.providers);
   if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
   return data;
 }
@@ -30,6 +30,7 @@ async function api(path, options = {}) {
 const state = {
   people: [],
   accounts: {},
+  providers: [],
   images: [], // { blob, url, alt, width, height }
   enabled: new Set(JSON.parse(localStorage.getItem('platforms') || 'null') || PLATFORMS),
 };
@@ -557,28 +558,22 @@ async function loadConfig() {
 
 // ---------- Login ----------
 
-function showLogin() {
+const PROVIDER_LABELS = { google: 'Google', github: 'GitHub' };
+
+function showLogin(providers) {
   $('app').hidden = true;
   $('logout').hidden = true;
+  $('me').textContent = '';
   $('login').hidden = false;
-  $('login-password').focus();
-}
-
-$('login-form').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  $('login-error').textContent = '';
-  try {
-    await api('/api/login', { method: 'POST', body: JSON.stringify({ password: $('login-password').value }) });
-    $('login-password').value = '';
-    await start();
-  } catch (err) {
-    $('login-error').textContent = err.message;
+  if (providers) {
+    $('login-buttons').replaceChildren(...providers.map((p) =>
+      h('a', { class: 'button', href: `/api/login/${p}` }, `Continue with ${PROVIDER_LABELS[p] || p}`)));
   }
-});
+}
 
 $('logout').addEventListener('click', async () => {
   await api('/api/logout', { method: 'POST', body: '{}' });
-  showLogin();
+  location.assign('/');
 });
 
 // ---------- Start ----------
@@ -592,7 +587,15 @@ async function start() {
     $('login-error').textContent = err.message;
     return;
   }
-  if (!me.loggedIn) return showLogin();
+  state.providers = me.providers || [];
+  const params = new URLSearchParams(location.search);
+  if (params.size) history.replaceState(null, '', '/');
+  if (!me.loggedIn) {
+    showLogin(me.providers);
+    $('login-error').textContent = params.get('login_error') || '';
+    return;
+  }
+  $('me').textContent = me.email;
   $('login').hidden = true;
   $('app').hidden = false;
   $('logout').hidden = false;
@@ -602,10 +605,8 @@ async function start() {
   drawImages();
 
   // Message left by the "Connect X / LinkedIn" round trip.
-  const params = new URLSearchParams(location.search);
   if (params.has('connected')) $('accounts-status').textContent = `${LABELS[params.get('connected')] || 'Account'} connected.`;
   if (params.has('connect_error')) $('accounts-status').textContent = `Could not connect. ${params.get('connect_error')}`;
-  if (params.size) history.replaceState(null, '', '/');
 }
 
 await start();

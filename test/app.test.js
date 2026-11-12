@@ -162,53 +162,106 @@ test('stored account data is encrypted and tied to the secret', async () => {
 
 const ORIGIN = 'https://post.example';
 
-function client(net, extraEnv = {}) {
-  const env = { DB: openD1(), APP_PASSWORD: 'open sesame', SESSION_SECRET: 'test-secret', ...extraEnv };
-  let cookie = '';
+/** Pretend Google and GitHub. "who" decides which account signs in. */
+const ssoRoutes = (who) => ({
+  'https://oauth2.googleapis.com/token': { access_token: 'google-token' },
+  'https://openidconnect.googleapis.com/v1/userinfo': () => ({ email: who.google, email_verified: who.googleVerified ?? true }),
+  'https://github.com/login/oauth/access_token': { access_token: 'github-token' },
+  'https://api.github.com/user/emails': () => who.github,
+});
+
+function client(routes = {}, extraEnv = {}) {
+  const who = { google: 'Me@Example.com', github: [{ email: 'me@example.com', verified: true, primary: true }] };
+  const net = fakeNet({ ...ssoRoutes(who), ...routes });
+  const env = {
+    DB: openD1(), SESSION_SECRET: 'test-secret', ALLOWED_EMAILS: 'me@example.com, partner@example.com',
+    GOOGLE_CLIENT_ID: 'gid', GOOGLE_CLIENT_SECRET: 'gsecret', GITHUB_CLIENT_ID: 'hid', GITHUB_CLIENT_SECRET: 'hsecret',
+    ...extraEnv,
+  };
+  const jar = new Map();
   const call = async (method, path, body, { origin = ORIGIN, redirect = false } = {}) => {
-    const headers = { Cookie: cookie };
+    const headers = { Cookie: [...jar].map(([k, v]) => `${k}=${v}`).join('; ') };
     if (method !== 'GET') headers.Origin = origin;
     if (body && !(body instanceof FormData)) {
       headers['Content-Type'] = 'application/json';
       body = JSON.stringify(body);
     }
     const res = await handle(new Request(ORIGIN + path, { method, headers, body }), env, net.fetch);
-    const set = res.headers.get('Set-Cookie');
-    if (set) cookie = set.split(';')[0];
+    for (const c of res.headers.getSetCookie()) {
+      const [name, value] = c.split(';')[0].split('=');
+      value ? jar.set(name, value) : jar.delete(name);
+    }
     if (redirect) return res;
     return { status: res.status, body: await res.json() };
   };
-  return { env, call, login: () => call('POST', '/api/login', { password: 'open sesame' }) };
+  /** Goes to the provider and back. Returns where the app sends the browser. */
+  const login = async (provider = 'google') => {
+    const go = await call('GET', `/api/login/${provider}`, null, { redirect: true });
+    const authorize = new URL(go.headers.get('Location'));
+    assert.equal(authorize.searchParams.get('redirect_uri'), `${ORIGIN}/api/login/${provider}/callback`);
+    const back = await call('GET', `/api/login/${provider}/callback?code=c&state=${authorize.searchParams.get('state')}`, null, { redirect: true });
+    return back.headers.get('Location');
+  };
+  return { env, net, who, jar, call, login };
 }
 
-test('nothing works without logging in, and guessing is slowed down', async () => {
-  const app = client(fakeNet({}));
-  assert.equal((await app.call('GET', '/api/people')).status, 401);
-  assert.deepEqual((await app.call('GET', '/api/me')).body, { loggedIn: false });
+test('nothing works until you sign in with an allowed Google or GitHub account', async () => {
+  for (const provider of ['google', 'github']) {
+    const app = client();
+    assert.equal((await app.call('GET', '/api/people')).status, 401);
+    assert.deepEqual((await app.call('GET', '/api/me')).body, { loggedIn: false, email: null, providers: ['google', 'github'] });
 
-  assert.equal((await app.call('POST', '/api/login', { password: 'nope' })).status, 401);
-  assert.equal((await app.login()).status, 200);
-  assert.equal((await app.call('GET', '/api/people')).status, 200);
+    assert.equal(await app.login(provider), '/');
+    assert.equal((await app.call('GET', '/api/me')).body.email, 'me@example.com');
+    assert.equal((await app.call('GET', '/api/people')).status, 200);
+    assert.equal((await app.call('POST', '/api/people', jane, { origin: 'https://evil.example' })).status, 403);
 
-  assert.equal((await app.call('POST', '/api/people', jane, { origin: 'https://evil.example' })).status, 403);
-
-  assert.equal((await app.call('POST', '/api/logout', {})).status, 200);
-  assert.equal((await app.call('GET', '/api/people')).status, 401);
-
-  for (let i = 0; i < 8; i++) await app.call('POST', '/api/login', { password: 'guess' });
-  assert.equal((await app.login()).status, 429, 'locked out after repeated failures');
+    assert.equal((await app.call('POST', '/api/logout', {})).status, 200);
+    assert.equal((await app.call('GET', '/api/people')).status, 401);
+  }
 });
 
-test('a forged or expired session cookie is refused', async () => {
-  const app = client(fakeNet({}));
-  const get = (cookie) => handle(new Request(ORIGIN + '/api/people', { headers: { Cookie: cookie } }), app.env);
-  assert.equal((await get(`mp_session=${Date.now() + 1e9}.forged`)).status, 401);
-  assert.equal((await get('mp_session=1.x')).status, 401);
+test('accounts that are not on the list are turned away', async () => {
+  const app = client();
+  app.who.google = 'stranger@example.com';
+  assert.match(await app.login('google'), /login_error=stranger%40example.com%20is%20not%20allowed/);
+
+  app.who.google = 'me@example.com';
+  app.who.googleVerified = false;
+  assert.match(await app.login('google'), /login_error/, 'unverified Google email');
+
+  app.who.github = [{ email: 'me@example.com', verified: false }, { email: 'other@example.com', verified: true }];
+  assert.match(await app.login('github'), /login_error/, 'unverified GitHub email does not count');
+  assert.equal((await app.call('GET', '/api/people')).status, 401);
+
+  app.who.github = [{ email: 'other@example.com', verified: true }, { email: 'Partner@Example.com', verified: true }];
+  assert.equal(await app.login('github'), '/', 'any verified address on the list is enough');
 });
 
-test('the app refuses to run without its secrets', async () => {
-  const res = await handle(new Request(ORIGIN + '/api/me'), { DB: openD1() });
-  assert.equal(res.status, 503);
+test('sign-in cannot be forged, replayed across browsers, or outlive the allow list', async () => {
+  const app = client();
+  // A callback without the matching state cookie (a link crafted by someone else).
+  const forged = await app.call('GET', '/api/login/google/callback?code=c&state=made-up', null, { redirect: true });
+  assert.match(forged.headers.get('Location'), /login_error/);
+
+  const get = (cookie) => handle(new Request(ORIGIN + '/api/people', { headers: { Cookie: cookie } }), app.env, app.net.fetch);
+  assert.equal((await get('mp_session=bWVAZXhhbXBsZS5jb20.9999999999999.forged')).status, 401);
+
+  await app.login();
+  const cookie = `mp_session=${app.jar.get('mp_session')}`;
+  assert.equal((await get(cookie)).status, 200);
+  app.env.ALLOWED_EMAILS = 'partner@example.com';
+  assert.equal((await get(cookie)).status, 401, 'removed from the list means locked out');
+
+  // Only configured providers are offered.
+  const googleOnly = client({}, { GITHUB_CLIENT_ID: '' });
+  assert.deepEqual((await googleOnly.call('GET', '/api/me')).body.providers, ['google']);
+  assert.equal((await googleOnly.call('GET', '/api/login/github')).status, 404);
+});
+
+test('the app refuses to run without its settings', async () => {
+  const res = await handle(new Request(ORIGIN + '/api/me'), { DB: openD1(), SESSION_SECRET: 's', GOOGLE_CLIENT_ID: 'a', GOOGLE_CLIENT_SECRET: 'b' });
+  assert.equal(res.status, 503, 'no ALLOWED_EMAILS');
 });
 
 function postForm({ text, platforms, images = [] }) {
@@ -221,7 +274,7 @@ function postForm({ text, platforms, images = [] }) {
 }
 
 test('unconnected platforms return a composer link with the right handle', async () => {
-  const app = client(fakeNet({}));
+  const app = client();
   await app.login();
   await app.call('POST', '/api/people', jane);
   const { body } = await app.call('POST', '/api/post', postForm({ text: 'Hi @[Jane Doe]', platforms: ['x', 'mastodon'] }));
@@ -237,7 +290,7 @@ test('unconnected platforms return a composer link with the right handle', async
 
 test('connect all four accounts, then post text, mentions and an image to each', async () => {
   const sent = {};
-  const net = fakeNet({
+  const routes = {
     // Bluesky
     'https://bsky.social/xrpc/com.atproto.server.createSession': { did: 'did:plc:me', handle: 'me.bsky.social', accessJwt: 'bsky-jwt' },
     'https://bsky.social/xrpc/com.atproto.repo.uploadBlob': { blob: { $type: 'blob', ref: { $link: 'cid1' }, mimeType: 'image/png', size: 3 } },
@@ -266,8 +319,8 @@ test('connect all four accounts, then post text, mentions and an image to each',
       sent.linkedinHeaders = o.headers;
       return new Response(null, { status: 201, headers: { 'x-restli-id': 'urn:li:share:7' } });
     },
-  });
-  const app = client(net, { X_CLIENT_ID: 'xid', X_CLIENT_SECRET: 'xsecret', LINKEDIN_CLIENT_ID: 'lid', LINKEDIN_CLIENT_SECRET: 'lsecret' });
+  };
+  const app = client(routes, { X_CLIENT_ID: 'xid', X_CLIENT_SECRET: 'xsecret', LINKEDIN_CLIENT_ID: 'lid', LINKEDIN_CLIENT_SECRET: 'lsecret' });
   await app.login();
 
   // Connect with pasted credentials.
@@ -319,7 +372,7 @@ test('connect all four accounts, then post text, mentions and an image to each',
 
   assert.deepEqual(sent.mastodon, { status: 'Thanks @jane@hachyderm.io (great talk)', media_ids: ['m1'] });
   assert.equal(sent.mastodonAlt, 'A slide');
-  assert.equal(net.called('https://example.social/api/v1/media/m1').length, 1, 'waited for the image to finish processing');
+  assert.equal(app.net.called('https://example.social/api/v1/media/m1').length, 1, 'waited for the image to finish processing');
 
   assert.deepEqual(sent.x, { text: 'Thanks @janedoe (great talk)', media: { media_ids: ['xm1'] } });
   assert.equal(sent.xCategory, 'tweet_image');
@@ -338,7 +391,7 @@ test('connect all four accounts, then post text, mentions and an image to each',
 
 test('an expired X token is refreshed before posting, and one failure does not stop the others', async () => {
   let refreshed = 0;
-  const net = fakeNet({
+  const app = client({
     'https://api.x.com/2/oauth2/token': (u, o) => {
       if (o.body.get('grant_type') === 'refresh_token') refreshed++;
       return { access_token: `x-access-${refreshed}`, refresh_token: 'x-refresh-2', expires_in: refreshed ? 7200 : 0 };
@@ -347,8 +400,7 @@ test('an expired X token is refreshed before posting, and one failure does not s
     'https://api.x.com/2/tweets': (u, o) => new Response(JSON.stringify({ data: { id: '5' }, auth: o.headers.Authorization })),
     'https://example.social/api/v1/accounts/verify_credentials': { username: 'me' },
     'https://example.social/api/v1/statuses': () => new Response('{"error":"Validation failed"}', { status: 422 }),
-  });
-  const app = client(net, { X_CLIENT_ID: 'xid' });
+  }, { X_CLIENT_ID: 'xid' });
   await app.login();
   await app.call('POST', '/api/accounts/mastodon', { instance: 'example.social', token: 't' });
   const go = await app.call('GET', '/api/connect/x', null, { redirect: true });
@@ -357,7 +409,7 @@ test('an expired X token is refreshed before posting, and one failure does not s
 
   const { body } = await app.call('POST', '/api/post', postForm({ text: 'hello', platforms: ['x', 'mastodon'] }));
   assert.equal(refreshed, 1);
-  assert.equal(net.called('https://api.x.com/2/tweets')[0].options.headers.Authorization, 'Bearer x-access-1');
+  assert.equal(app.net.called('https://api.x.com/2/tweets')[0].options.headers.Authorization, 'Bearer x-access-1');
   assert.equal(body.x.status, 'posted');
   assert.equal(body.mastodon.status, 'error');
   assert.match(body.mastodon.error, /Validation failed/);
