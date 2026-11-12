@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>multi-post</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <div>
+      <h1>multi-post</h1>
+      <p>Write once. Post to Bluesky, LinkedIn, Mastodon and X.</p>
+    </div>
+    <div class="who-am-i"><span id="me"></span> <button id="logout" hidden>Log out</button></div>
+  </header>
+
+  <section class="card" id="login" hidden>
+    <h2>Sign in</h2>
+    <div id="login-buttons"></div>
+    <p id="login-error" class="error" role="alert"></p>
+  </section>
+
+  <main id="app" hidden>
+    <section class="card" id="composer">
+      <h2>Compose</h2>
+      <div class="editor">
+        <textarea id="draft" rows="7" placeholder="What do you want to share? Type @ to mention someone."
+          aria-label="Post text" aria-controls="suggest" autocomplete="off"></textarea>
+        <ul id="suggest" role="listbox" hidden></ul>
+      </div>
+      <ul id="images"></ul>
+      <input id="image-input" type="file" accept="image/*" multiple hidden>
+      <div id="platforms" class="platforms" role="group" aria-label="Post to"></div>
+      <div class="actions">
+        <button id="post" class="primary">Post</button>
+        <button id="add-image">Add image</button>
+        <button id="clear">Clear</button>
+        <span id="status" role="status"></span>
+      </div>
+      <div id="results"></div>
+    </section>
+
+    <section class="card">
+      <h2>Preview</h2>
+      <div id="previews"></div>
+    </section>
+
+    <section class="card wide">
+      <h2>Your accounts</h2>
+      <p class="hint">Connected accounts post directly. Others open that platform's composer with your text.</p>
+      <ul id="accounts" class="rows"></ul>
+      <p id="accounts-status" class="hint" role="status"></p>
+    </section>
+
+    <section class="card wide" id="people-card">
+      <div class="row">
+        <h2>People</h2>
+        <button id="add-person">Add person</button>
+      </div>
+      <p class="hint">Saved profiles. Type @ in a post to mention them.</p>
+      <ul id="people" class="rows"></ul>
+    </section>
+  </main>
+
+  <dialog id="resolver">
+    <form method="dialog" id="resolver-form">
+      <h2 id="resolver-title">Find profiles</h2>
+      <label class="field">Name
+        <input id="person-name" required maxlength="80" autocomplete="off">
+      </label>
+      <p class="hint">Pick their profile on each platform. Skip any they are not on.</p>
+      <div id="resolver-platforms"></div>
+      <p id="resolver-error" class="error" role="alert"></p>
+      <div class="actions end">
+        <button type="button" id="resolver-cancel">Cancel</button>
+        <button type="submit" class="primary" id="resolver-save">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="account-dialog">
+    <form method="dialog" id="account-form">
+      <h2 id="account-title">Connect</h2>
+      <p id="account-intro" class="hint"></p>
+      <div id="account-fields"></div>
+      <p id="account-error" class="error" role="alert"></p>
+      <div class="actions end">
+        <button type="button" id="account-cancel">Cancel</button>
+        <button type="submit" class="primary" id="account-save">Connect</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
