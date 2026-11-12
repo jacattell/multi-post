@@ -60,6 +60,21 @@ You need Node.js 22.13 or newer and a Cloudflare account.
 **Your own domain:** set the `routes` line in `wrangler.jsonc` to the name you
 want and deploy again. The domain must already be on your Cloudflare account.
 
+## Automatic image descriptions (optional)
+
+When you attach an image, the app can suggest alt text for it using Claude and put it in the description box, marked "Suggested automatically" so you know to check it. It never replaces anything you have typed. The image and the post's text are sent to Anthropic to write the description.
+
+1. Create an API key in the [Claude Console](https://platform.claude.com/), and set a monthly spend limit for it.
+2. Save it:
+
+   ```bash
+   npx wrangler secret put ANTHROPIC_API_KEY
+   ```
+
+3. Deploy again.
+
+It uses Claude Opus 5.5, which costs roughly 1p per image or less. To use another model, set `ALT_TEXT_MODEL` (for example `claude-haiku-5-5`, which is much cheaper) as a variable in `wrangler.jsonc` or the Cloudflare dashboard. Without a key, the description box works as before.
+
 ## Set up sign-in
 
 Set up Google, GitHub, or both. The sign-in page shows a button for each one

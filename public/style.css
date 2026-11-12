@@ -108,5 +108,8 @@ a.button:hover { border-color: var(--accent); }
 #images { list-style: none; margin: .6rem 0 0; padding: 0; display: grid; gap: .4rem; }
 #images li { display: flex; gap: .5rem; align-items: center; }
 #images img { width: 56px; height: 56px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); flex: none; }
-#images input { flex: 1; min-width: 0; }
+#images .alt-field { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .15rem; }
+#images input { width: 100%; min-width: 0; }
+#images .alt-note { color: var(--muted); font-size: .8rem; min-height: 1em; }
+#images .alt-note:empty { display: none; }
 .actions { flex-wrap: wrap; }

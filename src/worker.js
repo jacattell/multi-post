@@ -4,6 +4,7 @@
 import { listPeople, savePerson, deletePerson, ValidationError } from './db.js';
 import { resolve } from './resolve.js';
 import { publish } from './post.js';
+import { suggestAltText, readAltTextRequest, AltTextError } from './alt.js';
 import { PLATFORMS, LABELS, LIMITS, render, count } from '../public/render.js';
 import { sessionCookie, clearSession, sessionEmail } from './auth.js';
 import { allowedEmails, loginProviders, isProvider, startLogin, finishLogin, clearLoginState } from './login.js';
@@ -112,7 +113,7 @@ async function api(request, url, ctx) {
   ctx.accounts = await getAccounts(ctx);
 
   if (pathname === '/api/config' && method === 'GET') {
-    return send(200, { accounts: publicAccounts(ctx.accounts, env) });
+    return send(200, { accounts: publicAccounts(ctx.accounts, env), altText: Boolean(env.ANTHROPIC_API_KEY) });
   }
 
   // ----- Your connected accounts -----
@@ -169,6 +170,17 @@ async function api(request, url, ctx) {
       return send(200, await resolve(resolveMatch[1], url.searchParams.get('q') || '', ctx));
     } catch (err) {
       return send(502, { error: `Lookup failed: ${err.message}` });
+    }
+  }
+
+  // ----- Suggested alt text for an image -----
+  if (pathname === '/api/alt-text' && method === 'POST') {
+    const { image, text } = await readAltTextRequest(request, { types: IMAGE_TYPES, maxBytes: MAX_IMAGE_BYTES });
+    try {
+      return send(200, { alt: await suggestAltText(ctx, image, text) });
+    } catch (err) {
+      if (err instanceof AltTextError) return send(err.status, { error: err.message });
+      throw err;
     }
   }
 

@@ -19,3 +19,6 @@ X_CLIENT_SECRET=
 # Optional: needed only to connect LinkedIn (from linkedin.com/developers).
 LINKEDIN_CLIENT_ID=
 LINKEDIN_CLIENT_SECRET=
+
+# Optional: suggests alt text for images (from platform.claude.com).
+ANTHROPIC_API_KEY=

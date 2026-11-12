@@ -417,3 +417,57 @@ test('an expired X token is refreshed before posting, and one failure does not s
   await app.call('POST', '/api/post', postForm({ text: 'again', platforms: ['x'] }));
   assert.equal(refreshed, 1, 'the new token was saved');
 });
+
+test('attaching an image can suggest alt text, using Claude', async () => {
+  const sent = [];
+  const reply = (stop = 'end_turn', text = '"A dalek dancing under coloured lights at a festival."') => (url, options) => {
+    sent.push({ url, headers: new Headers(options.headers), body: JSON.parse(options.body) });
+    return new Response(JSON.stringify({
+      id: 'msg_1', type: 'message', role: 'assistant', model: 'claude-opus-5-5', stop_reason: stop, stop_sequence: null,
+      content: [{ type: 'text', text }], usage: { input_tokens: 10, output_tokens: 10 },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+  const image = () => {
+    const form = new FormData();
+    form.append('image', new Blob([new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3])], { type: 'image/jpeg' }), 'a.jpg');
+    form.append('text', 'Look who I met at #emf2026');
+    return form;
+  };
+
+  // Not set up: the page is told, and the address says so
+  const plain = client();
+  await plain.login();
+  assert.equal((await plain.call('GET', '/api/config')).body.altText, false);
+  assert.equal((await plain.call('POST', '/api/alt-text', image())).status, 503);
+
+  const app = client({ 'https://api.anthropic.com/v1/messages': reply() }, { ANTHROPIC_API_KEY: 'sk-ant-test' });
+  assert.equal((await app.call('POST', '/api/alt-text', image())).status, 401, 'needs a login');
+  await app.login();
+  assert.equal((await app.call('GET', '/api/config')).body.altText, true);
+  const res = await app.call('POST', '/api/alt-text', image());
+  assert.equal(res.status, 200);
+  assert.equal(res.body.alt, 'A dalek dancing under coloured lights at a festival.', 'quotes are tidied away');
+
+  const req = sent[0];
+  assert.equal(req.headers.get('authorization'), 'Bearer sk-ant-test');
+  assert.equal(req.body.model, 'claude-opus-5-5');
+  assert.equal(req.body.fallbacks, 'default');
+  const [img, text] = req.body.messages[0].content;
+  assert.equal(img.type, 'image');
+  assert.equal(img.source.media_type, 'image/jpeg');
+  assert.equal(img.source.data, btoa(String.fromCharCode(0xff, 0xd8, 0xff, 0xe0, 1, 2, 3)));
+  assert.match(text.text, /#emf2026/, 'the post text is sent as context');
+
+  // Only images, and not cross-site
+  const notImage = new FormData();
+  notImage.append('image', new Blob(['hello'], { type: 'text/plain' }), 'a.txt');
+  assert.equal((await app.call('POST', '/api/alt-text', notImage)).status, 400);
+  assert.equal((await app.call('POST', '/api/alt-text', image(), { origin: 'https://evil.example' })).status, 403);
+
+  // If Claude declines, the page gets a clear message
+  const declined = client({ 'https://api.anthropic.com/v1/messages': reply('refusal', '') }, { ANTHROPIC_API_KEY: 'sk-ant-test' });
+  await declined.login();
+  const no = await declined.call('POST', '/api/alt-text', image());
+  assert.equal(no.status, 422);
+  assert.equal(no.body.error, 'Could not describe this image');
+});

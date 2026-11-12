@@ -31,7 +31,8 @@ const state = {
   people: [],
   accounts: {},
   providers: [],
-  images: [], // { blob, url, alt, width, height }
+  images: [], // { blob, url, alt, width, height, altState }
+  altText: false, // whether the server can suggest alt text
   enabled: new Set(JSON.parse(localStorage.getItem('platforms') || 'null') || PLATFORMS),
 };
 
@@ -393,7 +394,9 @@ async function addImages(files) {
     }
     try {
       const prepared = await prepareImage(file);
-      state.images.push({ ...prepared, url: URL.createObjectURL(prepared.blob), alt: '' });
+      const img = { ...prepared, url: URL.createObjectURL(prepared.blob), alt: '', altState: null };
+      state.images.push(img);
+      if (state.altText) suggestAlt(img);
     } catch (err) {
       $('status').textContent = `${file.name}: ${err.message || 'not a usable image'}`;
     }
@@ -401,19 +404,62 @@ async function addImages(files) {
   drawImages();
 }
 
+const ALT_NOTES = {
+  writing: 'Writing a description…',
+  suggested: 'Suggested automatically. Check it’s right.',
+  failed: 'Could not suggest a description. Please write one.',
+};
+
+/** Asks the server to suggest alt text. Never replaces anything typed in the meantime. */
+async function suggestAlt(img) {
+  img.altState = 'writing';
+  showAltState(img);
+  const form = new FormData();
+  form.append('image', img.blob);
+  form.append('text', draft.value);
+  try {
+    const { alt } = await api('/api/alt-text', { method: 'POST', body: form });
+    if (!state.images.includes(img) || img.alt.trim()) { img.altState = null; return; }
+    img.alt = alt;
+    img.altState = 'suggested';
+    if (img.input) img.input.value = alt;
+    drawPreviews();
+  } catch {
+    if (state.images.includes(img) && !img.alt.trim()) img.altState = 'failed';
+    else img.altState = null;
+  }
+  showAltState(img);
+}
+
+/** Updates one image's description box and note without redrawing the list (keeps your cursor where it is). */
+function showAltState(img) {
+  if (!img.input) return;
+  img.input.placeholder = img.altState === 'writing' ? ALT_NOTES.writing : 'Describe this image (alt text)';
+  img.input.setAttribute('aria-busy', String(img.altState === 'writing'));
+  img.note.textContent = ALT_NOTES[img.altState] || '';
+}
+
 function drawImages() {
-  $('images').replaceChildren(...state.images.map((img, i) =>
-    h('li', {},
+  $('images').replaceChildren(...state.images.map((img, i) => {
+    img.input = h('input', {
+      placeholder: 'Describe this image (alt text)', 'aria-label': `Description of image ${i + 1}`,
+      'aria-describedby': `alt-note-${i}`,
+      value: img.alt, maxlength: 1000, oninput: (e) => {
+        img.alt = e.target.value;
+        if (img.altState) { img.altState = null; showAltState(img); }
+      },
+    });
+    img.note = h('span', { class: 'alt-note', id: `alt-note-${i}`, 'aria-live': 'polite' });
+    showAltState(img);
+    return h('li', {},
       h('img', { src: img.url, alt: img.alt || `Image ${i + 1}` }),
-      h('input', {
-        placeholder: 'Describe this image (alt text)', 'aria-label': `Description of image ${i + 1}`,
-        value: img.alt, maxlength: 1000, oninput: (e) => { img.alt = e.target.value; },
-      }),
+      h('div', { class: 'alt-field' }, img.input, img.note),
       h('button', { 'aria-label': `Remove image ${i + 1}`, onclick: () => {
         URL.revokeObjectURL(img.url);
         state.images.splice(i, 1);
         drawImages();
-      } }, 'Remove'))));
+      } }, 'Remove'));
+  }));
   $('add-image').disabled = state.images.length >= MAX_IMAGES;
   drawPreviews();
 }
@@ -551,7 +597,9 @@ $('account-form').addEventListener('submit', async (e) => {
 });
 
 async function loadConfig() {
-  state.accounts = (await api('/api/config')).accounts;
+  const config = await api('/api/config');
+  state.accounts = config.accounts;
+  state.altText = Boolean(config.altText);
   drawPlatforms();
   drawAccounts();
 }
