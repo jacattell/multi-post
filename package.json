@@ -1,0 +1,12 @@
+{
+  "name": "multi-post",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Write once, post to Bluesky, LinkedIn, Mastodon and X - with @mentions resolved per platform",
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env server.js",
+    "test": "node --disable-warning=ExperimentalWarning --test"
+  }
+}
