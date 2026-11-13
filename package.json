@@ -10,6 +10,7 @@
   "scripts": {
     "dev": "wrangler d1 migrations apply multi-post --local && wrangler dev",
     "dev:node": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.dev.vars dev/server.js",
+    "build": "echo \"Nothing to build\"",
     "deploy": "wrangler d1 migrations apply multi-post --remote && wrangler deploy",
     "test": "node --disable-warning=ExperimentalWarning --test"
   },
