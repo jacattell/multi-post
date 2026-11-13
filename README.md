@@ -2,6 +2,8 @@
 
 Write a post once, then send it to Bluesky, LinkedIn, Mastodon and X.
 
+Live at https://multi-post.cattell.com. Every push to `main` deploys it.
+
 - **@mentions that work everywhere.** Type `@`, find the person on each
   platform once, and their profiles are saved. Next time, `@` plus a few
   letters is enough.
