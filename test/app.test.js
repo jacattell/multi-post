@@ -174,7 +174,7 @@ function client(routes = {}, extraEnv = {}) {
   const who = { google: 'Me@Example.com', github: [{ email: 'me@example.com', verified: true, primary: true }] };
   const net = fakeNet({ ...ssoRoutes(who), ...routes });
   const env = {
-    DB: openD1(), SESSION_SECRET: 'test-secret', ALLOWED_EMAILS: 'me@example.com, partner@example.com',
+    DB: openD1(), SESSION_SECRET: 'test-secret-'.repeat(3), ALLOWED_EMAILS: 'me@example.com, partner@example.com',
     GOOGLE_CLIENT_ID: 'gid', GOOGLE_CLIENT_SECRET: 'gsecret', GITHUB_CLIENT_ID: 'hid', GITHUB_CLIENT_SECRET: 'hsecret',
     ...extraEnv,
   };
@@ -260,8 +260,12 @@ test('sign-in cannot be forged, replayed across browsers, or outlive the allow l
 });
 
 test('the app refuses to run without its settings', async () => {
-  const res = await handle(new Request(ORIGIN + '/api/me'), { DB: openD1(), SESSION_SECRET: 's', GOOGLE_CLIENT_ID: 'a', GOOGLE_CLIENT_SECRET: 'b' });
-  assert.equal(res.status, 503, 'no ALLOWED_EMAILS');
+  const settings = { DB: openD1(), SESSION_SECRET: 's'.repeat(32), ALLOWED_EMAILS: 'me@example.com', GOOGLE_CLIENT_ID: 'a', GOOGLE_CLIENT_SECRET: 'b' };
+  const status = async (env) => (await handle(new Request(ORIGIN + '/api/me'), env)).status;
+  assert.equal(await status(settings), 200);
+  assert.equal(await status({ ...settings, ALLOWED_EMAILS: undefined }), 503, 'no ALLOWED_EMAILS');
+  assert.equal(await status({ ...settings, SESSION_SECRET: undefined }), 503, 'no SESSION_SECRET');
+  assert.equal(await status({ ...settings, SESSION_SECRET: 's'.repeat(31) }), 503, 'a short SESSION_SECRET');
 });
 
 function postForm({ text, platforms, images = [] }) {

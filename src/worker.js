@@ -18,6 +18,7 @@ const MAX_IMAGE_BYTES = 1_000_000; // Bluesky's limit; the page shrinks images t
 const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif'];
 const CONNECT_COOKIE = 'mp_connect'; // which account connection this browser started
 const CONNECT_SECONDS = 10 * 60;
+const MIN_SECRET_LENGTH = 32;
 
 const send = (status, body, headers = {}) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Robots-Tag': 'noindex', ...headers } });
@@ -76,8 +77,9 @@ async function api(request, url, ctx) {
 
   const providers = loginProviders(env);
   const allowed = allowedEmails(env);
-  if (!env.SESSION_SECRET || !allowed.length || !providers.length) {
-    return send(503, { error: 'Not set up: add SESSION_SECRET, ALLOWED_EMAILS, and Google or GitHub sign-in secrets. See the README.' });
+  // The secret signs sign-ins and protects the saved account sign-ins, so a short one is refused.
+  if (!env.SESSION_SECRET || env.SESSION_SECRET.length < MIN_SECRET_LENGTH || !allowed.length || !providers.length) {
+    return send(503, { error: `Not set up: add SESSION_SECRET (at least ${MIN_SECRET_LENGTH} random characters), ALLOWED_EMAILS, and Google or GitHub sign-in secrets. See the README.` });
   }
 
   // Only our own page may make changes (blocks cross-site requests).

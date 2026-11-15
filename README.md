@@ -36,7 +36,8 @@ You need Node.js 22.13 or newer and a Cloudflare account.
 
 3. Set who may sign in, and a long random secret (for example the output of
    `openssl rand -hex 32`). The secret signs your login and encrypts the
-   account tokens the app stores.
+   account tokens the app stores. It must be at least 32 characters, or the
+   app refuses to run.
 
    ```bash
    npx wrangler secret put ALLOWED_EMAILS
