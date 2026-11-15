@@ -18,7 +18,7 @@ const MAX_IMAGE_BYTES = 1_000_000; // Bluesky's limit; the page shrinks images t
 const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif'];
 
 const send = (status, body, headers = {}) =>
-  new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...headers } });
+  new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Robots-Tag': 'noindex', ...headers } });
 
 function redirect(location, cookies = []) {
   const headers = new Headers({ Location: location, 'Cache-Control': 'no-store' });

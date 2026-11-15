@@ -471,3 +471,46 @@ test('attaching an image can suggest alt text, using Claude', async () => {
   assert.equal(no.status, 422);
   assert.equal(no.body.error, 'Could not describe this image');
 });
+
+test('Mastodon server must be a real server name, not a numeric address', async () => {
+  const { cleanInstance } = await import('../src/accounts.js');
+  assert.equal(cleanInstance('https://Mastodon.social/@me'), 'https://mastodon.social');
+  assert.equal(cleanInstance('hachyderm.io'), 'https://hachyderm.io');
+  assert.equal(cleanInstance('social.xn--p1ai'), 'https://social.xn--p1ai');
+  for (const bad of ['127.0.0.1', '10.0.0.5', '169.254.169.254', 'localhost', '[::1]', 'mastodon.social:8443', 'user@mastodon.social', '']) {
+    assert.throws(() => cleanInstance(bad), ValidationError, bad);
+  }
+});
+
+test('security: sign-ins last a week, replies and pages carry safety headers, one address only', async () => {
+  const fs = await import('node:fs');
+  const { sessionCookie } = await import('../src/auth.js');
+  const cookie = await sessionCookie({ SESSION_SECRET: 's'.repeat(40) }, 'me@example.com', true);
+  assert.match(cookie, /Max-Age=604800;/);
+  assert.match(cookie, /HttpOnly; SameSite=Lax/);
+  assert.match(cookie, /; Secure$/);
+
+  // API replies can't be read as anything but JSON.
+  const res = await handle(new Request('https://multi-post.example/api/me'), {});
+  assert.equal(res.headers.get('X-Content-Type-Options'), 'nosniff');
+
+  // The page: no framing, own script and styles only, and never "no-referrer"
+  // (browsers would send "Origin: null" and every change would be refused).
+  const headers = fs.readFileSync(new URL('../public/_headers', import.meta.url), 'utf8');
+  const policy = /^\s+Content-Security-Policy: (.+)$/m.exec(headers)[1];
+  for (const part of ["default-src 'self'", "script-src 'self'", "style-src 'self'", "connect-src 'self'", "frame-ancestors 'none'", "object-src 'none'", "base-uri 'none'"]) {
+    assert.ok(policy.split('; ').includes(part), part);
+  }
+  assert.doesNotMatch(policy, /unsafe-inline|unsafe-eval/);
+  assert.match(headers, /^\s+X-Frame-Options: DENY$/m);
+  assert.match(headers, /^\s+X-Content-Type-Options: nosniff$/m);
+  assert.match(headers, /^\s+Referrer-Policy: same-origin$/m);
+  // The page has nothing inline for the policy to block.
+  const page = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+  assert.doesNotMatch(page, /<script(?![^>]*\bsrc=)|<style|\sstyle=|\son[a-z]+=/i);
+
+  // Only the app's own domain answers.
+  const config = fs.readFileSync(new URL('../wrangler.jsonc', import.meta.url), 'utf8');
+  assert.match(config, /"workers_dev": false/);
+  assert.match(config, /"preview_urls": false/);
+});

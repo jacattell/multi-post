@@ -55,7 +55,10 @@ You need Node.js 22.13 or newer and a Cloudflare account.
    npm run deploy
    ```
 
-   Wrangler prints the address, like `https://multi-post.<you>.workers.dev`.
+   Wrangler prints the address. This project uses its own domain
+   (`multi-post.cattell.com`), and the `workers.dev` address is switched off in
+   `wrangler.jsonc`. To use a `workers.dev` address instead, set `workers_dev`
+   to `true` and remove the `routes` line.
 
 5. Set up sign-in (next section), then deploy once more.
 
@@ -121,7 +124,7 @@ It does not need to be public.
 
 Only verified email addresses in `ALLOWED_EMAILS`. Everyone who signs in
 shares the same saved people and connected accounts. Removing an address
-locks that person out straight away. A sign-in lasts 30 days.
+locks that person out straight away. A sign-in lasts 7 days.
 
 ## Connect your accounts
 

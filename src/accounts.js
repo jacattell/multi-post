@@ -83,7 +83,8 @@ export async function connectBluesky(ctx, { handle, appPassword }) {
 
 export function cleanInstance(value) {
   const host = String(value || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
-  if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(host)) throw new ValidationError('Enter your Mastodon server, like mastodon.social');
+  // A real server name ends in letters (.social, .io), so numeric addresses like 127.0.0.1 are refused.
+  if (!/^[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z][a-z0-9-]*$/.test(host)) throw new ValidationError('Enter your Mastodon server, like mastodon.social');
   return `https://${host}`;
 }
 

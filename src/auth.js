@@ -62,7 +62,7 @@ export async function readSignedCookie(env, request, name) {
 // ---------- Login session ----------
 
 const SESSION = 'mp_session';
-const SESSION_SECONDS = 30 * 86400;
+const SESSION_SECONDS = 7 * 86400; // a week: this app can post to your accounts, so sign-ins are kept short
 
 export const sessionCookie = (env, email, secure) => signedCookie(env, SESSION, email, SESSION_SECONDS, secure);
 export const clearSession = (secure) => expiredCookie(SESSION, secure);
