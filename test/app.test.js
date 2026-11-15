@@ -527,3 +527,38 @@ test('resolve only passes on https links and pictures from other servers', async
   const [good] = await lookup({ url: 'https://evil.example/@a', avatar: 'https://evil.example/a.png' });
   assert.deepEqual([good.url, good.avatar], ['https://evil.example/@a', 'https://evil.example/a.png']);
 });
+
+test('connecting X only finishes in the browser that started it', async () => {
+  const routes = {
+    'https://api.x.com/2/oauth2/token': { access_token: 'x-access', refresh_token: 'x-refresh', expires_in: 7200 },
+    'https://api.x.com/2/users/me': { data: { id: '1', username: 'someone_else' } },
+  };
+  // Two people who are both allowed in, sharing one database.
+  const mallory = client(routes, { X_CLIENT_ID: 'xid' });
+  await mallory.login();
+  const victim = client(routes, { X_CLIENT_ID: 'xid', DB: mallory.env.DB });
+  await victim.login();
+
+  // Mallory starts connecting their own X account, then sends the finishing link to the victim.
+  const go = await mallory.call('GET', '/api/connect/x', null, { redirect: true });
+  assert.match(go.headers.get('Set-Cookie'), /^mp_connect=[\w.-]+; Path=\/; HttpOnly; SameSite=Lax; Max-Age=600; Secure$/);
+  const state = new URL(go.headers.get('Location')).searchParams.get('state');
+  const link = `/api/callback/x?code=c&state=${state}`;
+
+  const tricked = await victim.call('GET', link, null, { redirect: true });
+  assert.match(decodeURIComponent(tricked.headers.get('Location')), /connect_error=X: That link was not started in this browser/);
+  assert.equal(victim.net.called('https://api.x.com/2/oauth2/token').length, 0, 'the code was never exchanged');
+  assert.equal((await victim.call('GET', '/api/config')).body.accounts.x.connected, false);
+
+  // A made-up cookie doesn't help: it has to be signed by the app.
+  victim.jar.set('mp_connect', `x:${state}`);
+  const forged = await victim.call('GET', link, null, { redirect: true });
+  assert.match(forged.headers.get('Location'), /connect_error=/);
+
+  // The browser that started it can still finish, once.
+  const finished = await mallory.call('GET', link, null, { redirect: true });
+  assert.equal(finished.headers.get('Location'), '/?connected=x');
+  assert.ok(!mallory.jar.has('mp_connect'), 'the cookie is cleared afterwards');
+  const again = await mallory.call('GET', link, null, { redirect: true });
+  assert.match(again.headers.get('Location'), /connect_error=/);
+});
