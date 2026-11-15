@@ -471,3 +471,27 @@ test('attaching an image can suggest alt text, using Claude', async () => {
   assert.equal(no.status, 422);
   assert.equal(no.body.error, 'Could not describe this image');
 });
+
+test('resolve only passes on https links and pictures from other servers', async () => {
+  const account = (extra) => new Response(JSON.stringify({ id: '1', acct: 'a', username: 'a', display_name: 'A', ...extra }));
+  const lookup = (extra) => resolve('mastodon', 'a@evil.example', { accounts: {}, fetch: async () => account(extra) });
+  for (const bad of ["javascript:fetch('/api/post',{method:'POST'})", 'java\tscript:alert(1)', ' javascript:alert(1)', 'data:text/html,x', 'http://evil.example/@a', '/relative', 42, null]) {
+    const [c] = await lookup({ url: bad, avatar: bad });
+    assert.equal(c.url, null, String(bad));
+    assert.equal(c.avatar, null, String(bad));
+    assert.equal(c.handle, 'a@evil.example', 'the person can still be chosen');
+  }
+  const [good] = await lookup({ url: 'https://evil.example/@a', avatar: 'https://evil.example/a.png' });
+  assert.deepEqual([good.url, good.avatar], ['https://evil.example/@a', 'https://evil.example/a.png']);
+});
+
+test('the page is sent with a content security policy that only allows its own scripts', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const headers = await readFile(new URL('../public/_headers', import.meta.url), 'utf8');
+  const csp = /Content-Security-Policy: (.+)/.exec(headers)[1];
+  assert.match(csp, /script-src 'self';/);
+  assert.match(csp, /frame-ancestors 'none'/);
+  assert.ok(!csp.includes('unsafe-inline') && !csp.includes('unsafe-eval'));
+  const html = await readFile(new URL('../public/index.html', import.meta.url), 'utf8');
+  assert.ok(!/<script(?![^>]*\bsrc=)|<style|\sstyle=|\son\w+=/i.test(html), 'the page has nothing the policy would block');
+});

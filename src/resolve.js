@@ -119,8 +119,18 @@ async function linkedin(q) {
 
 const RESOLVERS = { bluesky, mastodon, x, linkedin };
 
+/**
+ * Other servers choose the links they send back, and any Mastodon server can be asked.
+ * Only ordinary https:// links are passed on to the page, so a server cannot send a
+ * link that runs code when it is clicked.
+ */
+export const httpsOrNull = (v) => {
+  try { return typeof v === 'string' && new URL(v).protocol === 'https:' ? v : null; } catch { return null; }
+};
+
 export async function resolve(platform, q, ctx) {
   if (!RESOLVERS[platform]) throw new Error('Unknown platform');
   if (!q || !q.trim()) return [];
-  return RESOLVERS[platform](q.slice(0, 300), ctx);
+  const found = await RESOLVERS[platform](q.slice(0, 300), ctx);
+  return found.map((c) => ({ ...c, url: httpsOrNull(c.url), avatar: httpsOrNull(c.avatar) }));
 }

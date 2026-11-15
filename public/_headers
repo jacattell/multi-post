@@ -1,0 +1,9 @@
+# Sent by Cloudflare with every file in this folder.
+# The page may only load its own scripts and styles, and cannot be shown inside another site.
+# Images may come from anywhere over https (profile pictures) and from the image picker (blob:).
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' https: blob: data:; connect-src 'self'; form-action 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: no-referrer
+  Permissions-Policy: camera=(), microphone=(), geolocation=()
