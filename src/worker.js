@@ -6,7 +6,7 @@ import { resolve } from './resolve.js';
 import { publish } from './post.js';
 import { suggestAltText, readAltTextRequest, AltTextError } from './alt.js';
 import { PLATFORMS, LABELS, LIMITS, render, count } from '../public/render.js';
-import { sessionCookie, clearSession, sessionEmail } from './auth.js';
+import { sessionCookie, clearSession, sessionEmail, signedCookie, readSignedCookie, expiredCookie } from './auth.js';
 import { allowedEmails, loginProviders, isProvider, startLogin, finishLogin, clearLoginState } from './login.js';
 import {
   getAccounts, publicAccounts, deleteAccount,
@@ -16,6 +16,8 @@ import {
 const MAX_IMAGES = 4;
 const MAX_IMAGE_BYTES = 1_000_000; // Bluesky's limit; the page shrinks images to fit.
 const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif'];
+const CONNECT_COOKIE = 'mp_connect'; // which account connection this browser started
+const CONNECT_SECONDS = 10 * 60;
 
 const send = (status, body, headers = {}) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Robots-Tag': 'noindex', ...headers } });
@@ -136,12 +138,25 @@ async function api(request, url, ctx) {
   const oauthMatch = pathname.match(/^\/api\/(connect|callback)\/(x|linkedin)$/);
   if (oauthMatch && method === 'GET') {
     const [, step, platform] = oauthMatch;
+    // Connecting is tied to the browser that started it: a signed cookie remembers
+    // which connection this browser asked for. Without it, someone signed in could
+    // start connecting their own account and send the finishing link to somebody
+    // else, whose click would swap the shared account for the wrong one.
+    const done = [expiredCookie(CONNECT_COOKIE, secure)];
     try {
-      if (step === 'connect') return redirect(await startOAuth(ctx, platform, url.origin));
+      if (step === 'connect') {
+        const to = await startOAuth(ctx, platform, url.origin);
+        const started = `${platform}:${new URL(to).searchParams.get('state')}`;
+        return redirect(to, [await signedCookie(env, CONNECT_COOKIE, started, CONNECT_SECONDS, secure)]);
+      }
+      const started = await readSignedCookie(env, request, CONNECT_COOKIE);
+      if (!started || started !== `${platform}:${url.searchParams.get('state')}`) {
+        throw new ValidationError('That link was not started in this browser. Try connecting again.');
+      }
       await finishOAuth(ctx, platform, url.searchParams, url.origin);
-      return redirect(`/?connected=${platform}`);
+      return redirect(`/?connected=${platform}`, done);
     } catch (err) {
-      return redirect(`/?connect_error=${encodeURIComponent(`${LABELS[platform]}: ${err.message}`)}`);
+      return redirect(`/?connect_error=${encodeURIComponent(`${LABELS[platform]}: ${err.message}`)}`, done);
     }
   }
 
