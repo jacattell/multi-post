@@ -514,3 +514,16 @@ test('security: sign-ins last a week, replies and pages carry safety headers, on
   assert.match(config, /"workers_dev": false/);
   assert.match(config, /"preview_urls": false/);
 });
+
+test('resolve only passes on https links and pictures from other servers', async () => {
+  const account = (extra) => new Response(JSON.stringify({ id: '1', acct: 'a', username: 'a', display_name: 'A', ...extra }));
+  const lookup = (extra) => resolve('mastodon', 'a@evil.example', { accounts: {}, fetch: async () => account(extra) });
+  for (const bad of ["javascript:fetch('/api/post',{method:'POST'})", 'java\tscript:alert(1)', ' javascript:alert(1)', 'data:text/html,x', 'http://evil.example/@a', '/relative', 42, null]) {
+    const [c] = await lookup({ url: bad, avatar: bad });
+    assert.equal(c.url, null, String(bad));
+    assert.equal(c.avatar, null, String(bad));
+    assert.equal(c.handle, 'a@evil.example', 'the person can still be chosen');
+  }
+  const [good] = await lookup({ url: 'https://evil.example/@a', avatar: 'https://evil.example/a.png' });
+  assert.deepEqual([good.url, good.avatar], ['https://evil.example/@a', 'https://evil.example/a.png']);
+});
