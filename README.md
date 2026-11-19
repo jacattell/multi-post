@@ -211,6 +211,14 @@ If someone has no profile on a platform, their plain name is used there.
   animated GIFs lose their animation.
 - **Copy-and-open links cannot carry images.** Add them by hand there.
 
+### Limits that protect the app
+
+Set in `src/limits.js` and `wrangler.jsonc`:
+
+- A post can be up to about 4.25 MB (4 images of 1 MB, plus text). Alt text requests up to about 1.06 MB. Other requests up to 64 KB. Bigger requests get "413 too large", and reading stops as soon as the limit is passed.
+- Images must really be JPEG, PNG or GIF: their first bytes are checked, not just their name or type.
+- Each signed-in person can post 5 times a minute and ask for 10 alt text suggestions a minute. More gets "429 too many requests". The Anthropic account's monthly spend limit is the backstop for alt text costs.
+
 ## Develop
 
 ```bash
