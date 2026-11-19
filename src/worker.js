@@ -8,6 +8,7 @@ import { suggestAltText, readAltTextRequest, AltTextError } from './alt.js';
 import { PLATFORMS, LABELS, LIMITS, render, count } from '../public/render.js';
 import { sessionCookie, clearSession, sessionEmail, signedCookie, readSignedCookie, expiredCookie } from './auth.js';
 import { allowedEmails, loginProviders, isProvider, startLogin, finishLogin, clearLoginState } from './login.js';
+import { readLimited, looksLike, checkRate, TooLarge, TooMany, MAX_JSON_BYTES, MAX_POST_BYTES, MAX_ALT_BYTES } from './limits.js';
 import {
   getAccounts, publicAccounts, deleteAccount,
   connectBluesky, connectMastodon, startOAuth, finishOAuth,
@@ -30,8 +31,9 @@ function redirect(location, cookies = []) {
 }
 
 async function readJson(request) {
+  const limited = await readLimited(request, MAX_JSON_BYTES);
   try {
-    return await request.json();
+    return await limited.json();
   } catch {
     throw new ValidationError('Invalid JSON');
   }
@@ -39,8 +41,9 @@ async function readJson(request) {
 
 async function readPost(request) {
   let form;
+  const limited = await readLimited(request, MAX_POST_BYTES);
   try {
-    form = await request.formData();
+    form = await limited.formData();
   } catch {
     throw new ValidationError('Invalid form');
   }
@@ -54,8 +57,10 @@ async function readPost(request) {
   for (const [i, file] of files.entries()) {
     if (!IMAGE_TYPES.includes(file.type)) throw new ValidationError('Images must be JPEG, PNG or GIF');
     if (file.size > MAX_IMAGE_BYTES) throw new ValidationError('An image is too large');
+    const bytes = await file.arrayBuffer();
+    if (!looksLike(bytes, file.type)) throw new ValidationError('That file is not a JPEG, PNG or GIF image');
     images.push({
-      bytes: await file.arrayBuffer(),
+      bytes,
       type: file.type,
       alt: String(meta[i]?.alt || '').trim().slice(0, 1500),
       width: Number(meta[i]?.width) || 0,
@@ -192,7 +197,9 @@ async function api(request, url, ctx) {
 
   // ----- Suggested alt text for an image -----
   if (pathname === '/api/alt-text' && method === 'POST') {
-    const { image, text } = await readAltTextRequest(request, { types: IMAGE_TYPES, maxBytes: MAX_IMAGE_BYTES });
+    await checkRate(env.ALT_TEXT_LIMIT, email);
+    const { image, text } = await readAltTextRequest(await readLimited(request, MAX_ALT_BYTES), { types: IMAGE_TYPES, maxBytes: MAX_IMAGE_BYTES });
+    if (!looksLike(image.bytes, image.type)) throw new ValidationError('That file is not a JPEG, PNG or GIF image');
     try {
       return send(200, { alt: await suggestAltText(ctx, image, text) });
     } catch (err) {
@@ -203,6 +210,7 @@ async function api(request, url, ctx) {
 
   // ----- Post -----
   if (pathname === '/api/post' && method === 'POST') {
+    await checkRate(env.POST_LIMIT, email);
     const { text, platforms, images } = await readPost(request);
     if (!text && !images.length) throw new ValidationError('Write something first');
     if (!platforms.length) throw new ValidationError('Choose at least one platform');
@@ -231,6 +239,8 @@ export async function handle(request, env, fetchFn = fetch) {
     return await api(request, url, ctx);
   } catch (err) {
     if (err instanceof ValidationError) return send(400, { error: err.message });
+    if (err instanceof TooLarge) return send(413, { error: err.message });
+    if (err instanceof TooMany) return send(429, { error: err.message });
     console.error(err);
     return send(500, { error: 'Something went wrong' });
   }

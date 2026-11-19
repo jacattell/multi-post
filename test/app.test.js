@@ -9,6 +9,9 @@ import { encryptJson, decryptJson } from '../src/auth.js';
 import { handle } from '../src/worker.js';
 import { openD1 } from '../dev/d1-sqlite.js';
 
+// The first bytes of a real PNG file, so the server's image check passes.
+const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+
 const jane = {
   name: 'Jane Doe',
   profiles: {
@@ -358,7 +361,7 @@ test('connect all four accounts, then post text, mentions and an image to each',
   const { status, body } = await app.call('POST', '/api/post', postForm({
     text: 'Thanks @[Jane Doe] (great talk)',
     platforms: ['bluesky', 'linkedin', 'mastodon', 'x'],
-    images: [{ bytes: 'png', alt: 'A slide' }],
+    images: [{ bytes: PNG, alt: 'A slide' }],
   }));
   assert.equal(status, 200);
   assert.deepEqual(Object.fromEntries(Object.entries(body).map(([p, r]) => [p, r.error || r.url])), {
@@ -565,4 +568,43 @@ test('connecting X only finishes in the browser that started it', async () => {
   assert.ok(!mallory.jar.has('mp_connect'), 'the cookie is cleared afterwards');
   const again = await mallory.call('GET', link, null, { redirect: true });
   assert.match(again.headers.get('Location'), /connect_error=/);
+});
+
+test('uploads: too-large bodies, fake images and too many requests are refused', async () => {
+  const { readLimited, looksLike, checkRate, TooLarge, TooMany, MAX_POST_BYTES } = await import('../src/limits.js');
+  // Refused from Content-Length alone, before anything is read.
+  await assert.rejects(readLimited(new Request('https://x/', { method: 'POST', headers: { 'Content-Length': String(MAX_POST_BYTES + 1) }, body: 'x' }), MAX_POST_BYTES), TooLarge);
+  // Refused while reading, when Content-Length is missing or wrong.
+  let pulled = 0;
+  const endless = new ReadableStream({ pull(c) { pulled++; c.enqueue(new Uint8Array(64 * 1024)); } });
+  await assert.rejects(readLimited(new Request('https://x/', { method: 'POST', body: endless, duplex: 'half' }), 1_000_000), TooLarge);
+  assert.ok(pulled < 40, `stopped reading early (${pulled} chunks)`);
+  const ok = await readLimited(new Request('https://x/', { method: 'POST', body: 'hello' }), 10);
+  assert.equal(await ok.text(), 'hello');
+
+  assert.equal(looksLike(PNG.buffer, 'image/png'), true);
+  assert.equal(looksLike(new Uint8Array([0xff, 0xd8, 0xff, 0xe0]).buffer, 'image/jpeg'), true);
+  assert.equal(looksLike(new TextEncoder().encode('GIF89a...').buffer, 'image/gif'), true);
+  assert.equal(looksLike(new TextEncoder().encode('<svg onload=alert(1)>').buffer, 'image/png'), false);
+  assert.equal(looksLike(PNG.buffer, 'image/jpeg'), false, 'a PNG labelled as JPEG');
+
+  await checkRate(undefined, 'me@example.com'); // no binding: not limited
+  await assert.rejects(checkRate({ limit: async () => ({ success: false }) }, 'me@example.com'), TooMany);
+});
+
+test('the API answers 413 for an upload that is too big and 429 when the rate limit is reached', async () => {
+  const app = client({}, { POST_LIMIT: { limit: async () => ({ success: false }) } });
+  await app.login('google');
+  const limited = await app.call('POST', '/api/post', postForm({ text: 'hi', platforms: ['x'] }));
+  assert.equal(limited.status, 429);
+  const big = client();
+  await big.login('google');
+  const form = new FormData();
+  form.append('text', 'x');
+  form.append('platforms', '["x"]');
+  for (let i = 0; i < 5; i++) form.append('images', new Blob([PNG, new Uint8Array(1_000_000)], { type: 'image/png' }), `${i}.png`);
+  const tooBig = await big.call('POST', '/api/post', form);
+  assert.equal(tooBig.status, 413);
+  const people = await big.call('POST', '/api/people', { name: 'x'.repeat(70 * 1024), profiles: {} });
+  assert.equal(people.status, 413, 'JSON bodies are limited too');
 });
